@@ -197,6 +197,52 @@
   .cat-pick.sel .rm{display:flex;}
   .save-btn{width:100%;color:#fff;border:none;border-radius:15px;padding:16px;font-size:18px;font-weight:700;cursor:pointer;margin-top:6px;transition:transform .1s;}
   .save-btn:active{transform:scale(.98);}
+
+  /* ===== Refinamento visual (v3) ===== */
+  .screen.active{animation:scrIn .28s cubic-bezier(.22,.61,.36,1);}
+  @keyframes scrIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  header{padding:10px 4px 2px;}
+  header h1{font-size:33px;background:linear-gradient(180deg,#ffffff,#c4c7cf);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+
+  .month-bar{border:1px solid rgba(255,255,255,.06);box-shadow:0 4px 14px rgba(0,0,0,.30);}
+  .month-bar button{transition:transform .1s,background .15s;}
+  .month-bar button:hover{background:#3a3a3d;}
+
+  .total-card{
+    background:radial-gradient(135% 135% at 0% 0%, #27374f 0%, #1a1e26 44%, #131315 100%);
+    border:1px solid rgba(255,255,255,.09);border-radius:24px;
+    box-shadow:0 14px 36px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+  }
+  .total-card .tlabel{color:#aeb6c2;}
+  .total-card .tvalue{font-variant-numeric:tabular-nums;}
+  .split{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.05);}
+  .split .sv{font-variant-numeric:tabular-nums;}
+
+  .card{border:1px solid rgba(255,255,255,.06);box-shadow:0 8px 22px rgba(0,0,0,.35);}
+  .tx-list{border:1px solid rgba(255,255,255,.05);box-shadow:0 8px 22px rgba(0,0,0,.30);border-radius:18px;}
+  .tx{transition:background .15s;}
+  .tx:active{background:var(--bg-elev2);}
+  .tx .amt{font-variant-numeric:tabular-nums;}
+  .tx .ic,.cat-ic{box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);}
+
+  /* Cabeçalho da lista + filtro por categoria */
+  .list-head{display:flex;align-items:baseline;justify-content:space-between;margin:0 4px 12px;}
+  .list-head h2{margin:0;}
+  .filter-total{font-size:13px;color:var(--label2);font-weight:700;font-variant-numeric:tabular-nums;}
+  .filterbar{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 14px;scrollbar-width:none;-ms-overflow-style:none;}
+  .filterbar::-webkit-scrollbar{display:none;}
+  .chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;background:var(--bg-elev);border:1px solid rgba(255,255,255,.08);color:var(--label2);font-size:14px;font-weight:600;padding:8px 13px;border-radius:20px;cursor:pointer;white-space:nowrap;transition:transform .12s,background .15s,color .15s,border-color .15s;}
+  .chip:active{transform:scale(.93);}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 14px rgba(10,132,255,.4);}
+  .chip .ce{font-size:15px;}
+
+  /* Barra de abas com ícones vetoriais */
+  .tabbar{box-shadow:0 -0.5px 0 rgba(255,255,255,.06);}
+  .tabbar .tab .ti{display:flex;align-items:center;justify-content:center;height:25px;}
+  .tabbar .tab .ti svg{width:25px;height:25px;display:block;}
+  .tabbar .add button{box-shadow:0 8px 22px rgba(10,132,255,.5);}
+  .tabbar .add button svg{width:26px;height:26px;display:block;}
 </style>
 </head>
 <body>
@@ -230,7 +276,8 @@
     </div>
     <div class="breakdown" id="breakdown"></div>
     <div class="list-section">
-      <h2>Lançamentos</h2>
+      <div class="list-head"><h2>Lançamentos</h2><span class="filter-total" id="filterTotal"></span></div>
+      <div class="filterbar" id="filterBar"></div>
       <div id="txContainer"></div>
     </div>
   </div>
@@ -267,9 +314,11 @@
 
 <!-- ===== TAB BAR ===== -->
 <div class="tabbar">
-  <button class="tab active" data-screen="screenHome"><span class="ti">🏠</span>Início</button>
-  <div class="add"><button id="openSheet">＋</button></div>
-  <button class="tab" data-screen="screenSummary"><span class="ti">📊</span>Resumo</button>
+  <button class="tab active" data-screen="screenHome">
+    <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>Início</button>
+  <div class="add"><button id="openSheet" aria-label="Adicionar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+  <button class="tab" data-screen="screenSummary">
+    <span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M2 20h20"/></svg></span>Resumo</button>
 </div>
 
 <!-- ===== ADD SHEET ===== -->
@@ -338,6 +387,7 @@ function saveCats(){localStorage.setItem(CAT_KEY,JSON.stringify(cats));}
 let cursor=new Date(); cursor.setDate(1);
 let curType="expense";
 let selectedCat=cats.expense[0].id;
+let filterCat=null;  // categoria ativa no filtro de lançamentos (null = todas)
 
 /* ---------- Helpers ---------- */
 const brl=v=>v.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
@@ -347,6 +397,7 @@ const MONTHS=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Ago
 const MONTHS_ABBR=["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
 const DAYS=["Domingo","Segunda","Terça","Quarta","Quinta","Sexta","Sábado"];
 const catById=(type,id)=>(cats[type]||[]).find(c=>c.id===id)||{n:"Sem categoria",e:"❓",c:"#8e8e93"};
+function findCatAny(id){ for(const ty of ["expense","income"]){const f=(cats[ty]||[]).find(c=>c.id===id);if(f)return f;} return {n:"Sem categoria",e:"❓",c:"#8e8e93"}; }
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function fmtDayHead(iso){
   const d=new Date(iso+"T12:00:00");
@@ -406,13 +457,23 @@ function render(){
     }).join("");
   } else bd.innerHTML="";
 
+  // ----- filtro por categoria -----
+  const presentIds=[...new Set(list.map(t=>t.cat))];
+  if(filterCat && !presentIds.includes(filterCat)) filterCat=null;
+  renderFilterBar(list, presentIds);
+  const shown=filterCat?list.filter(t=>t.cat===filterCat):list;
+  const ft=document.getElementById("filterTotal");
+  ft.textContent=filterCat?`${shown.length} lanç. • ${brl(shown.reduce((s,t)=>s+t.amount,0))}`:"";
+
   // transactions
   const cont=document.getElementById("txContainer");
-  if(!list.length){
-    cont.innerHTML=`<div class="empty"><div class="big">📭</div>Nada neste mês ainda.<br>Toque em <b>＋</b> para começar.</div>`;
+  if(!shown.length){
+    cont.innerHTML=list.length
+      ? `<div class="empty"><div class="big">🔍</div>Nenhum lançamento nesta categoria.</div>`
+      : `<div class="empty"><div class="big">📭</div>Nada neste mês ainda.<br>Toque em <b>＋</b> para começar.</div>`;
   } else {
     const groups={};
-    list.forEach(t=>{(groups[t.date]=groups[t.date]||[]).push(t);});
+    shown.forEach(t=>{(groups[t.date]=groups[t.date]||[]).push(t);});
     cont.innerHTML=Object.keys(groups).sort((a,b)=>b.localeCompare(a)).map(day=>{
       const items=groups[day].map(t=>{
         const c=catById(t.type,t.cat); const inc=t.type==="income";
@@ -427,6 +488,25 @@ function render(){
 
   renderSummary(rows,expense,income);
 }
+
+/* ---------- Filtro por categoria (chips) ---------- */
+function renderFilterBar(list, presentIds){
+  const bar=document.getElementById("filterBar");
+  if(presentIds.length<2){ filterCat=null; bar.innerHTML=""; return; }
+  const totals={}; list.forEach(t=>totals[t.cat]=(totals[t.cat]||0)+t.amount);
+  const ordered=[...presentIds].sort((a,b)=>(totals[b]||0)-(totals[a]||0));
+  let html=`<button class="chip${!filterCat?' on':''}" data-f="">Todas</button>`;
+  html+=ordered.map(id=>{
+    const c=findCatAny(id);
+    return `<button class="chip${filterCat===id?' on':''}" data-f="${id}"><span class="ce">${c.e}</span>${escapeHtml(c.n)}</button>`;
+  }).join("");
+  bar.innerHTML=html;
+}
+document.getElementById("filterBar").addEventListener("click",e=>{
+  const ch=e.target.closest(".chip"); if(!ch)return;
+  filterCat=ch.dataset.f||null;
+  render();
+});
 
 /* ---------- Summary (charts) ---------- */
 function renderSummary(rows,expense,income){
