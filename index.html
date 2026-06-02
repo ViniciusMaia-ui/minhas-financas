@@ -70,6 +70,8 @@
   }
   .total-card .tlabel{color:var(--label2);font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
   .total-card .tvalue{font-size:38px;font-weight:800;letter-spacing:-1px;margin-top:4px;}
+  .total-card .tsub{font-size:13px;color:var(--label2);margin-top:7px;font-weight:600;}
+  .total-card .tsub b{font-weight:700;}
   .splits{display:flex;gap:10px;margin-top:16px;}
   .split{flex:1;background:#00000033;border-radius:14px;padding:12px;}
   .split .sl{font-size:12px;color:var(--label2);font-weight:600;display:flex;align-items:center;gap:5px;}
@@ -212,8 +214,9 @@
       <button class="navNext">›</button>
     </div>
     <div class="total-card">
-      <div class="tlabel">Saldo do mês</div>
+      <div class="tlabel">Saldo acumulado</div>
       <div class="tvalue" id="monthBalance">R$ 0,00</div>
+      <div class="tsub" id="balSub"></div>
       <div class="splits">
         <div class="split">
           <div class="sl"><span class="dot" style="background:var(--green)"></span>Entradas</div>
@@ -363,11 +366,28 @@ function render(){
   const list=txs.filter(t=>t.date.slice(0,7)===mk).sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);
   const income=list.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
   const expense=list.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  const balance=income-expense;
+  const monthNet=income-expense;
+
+  // saldo que vem de TODOS os meses anteriores (acumulado contínuo)
+  let carry=0;
+  for(const t of txs){
+    if(t.date.slice(0,7) < mk) carry += (t.type==="income" ? t.amount : -t.amount);
+  }
+  const accumulated=carry+monthNet;
+
+  const signed=v=>(v<0?"-":"")+brl(Math.abs(v));
+  const colorOf=v=>v>0?"var(--green)":v<0?"var(--red)":"var(--label)";
 
   const balEl=document.getElementById("monthBalance");
-  balEl.textContent=(balance<0?"-":"")+brl(Math.abs(balance));
-  balEl.style.color=balance>0?"var(--green)":balance<0?"var(--red)":"var(--label)";
+  balEl.textContent=signed(accumulated);
+  balEl.style.color=colorOf(accumulated);
+
+  const sub=document.getElementById("balSub");
+  const monthStr=(monthNet>0?"+":monthNet<0?"-":"")+brl(Math.abs(monthNet));
+  const carryStr=(carry>0?"+":carry<0?"-":"")+brl(Math.abs(carry));
+  sub.innerHTML=`Vem dos meses anteriores: <b style="color:${colorOf(carry)}">${carryStr}</b><br>`+
+                `Resultado deste mês: <b style="color:${colorOf(monthNet)}">${monthStr}</b>`;
+
   document.getElementById("monthIn").textContent=brl(income);
   document.getElementById("monthOut").textContent=brl(expense);
 
