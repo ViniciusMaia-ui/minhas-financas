@@ -286,6 +286,16 @@
   .lbtn:active{transform:scale(.92);}
   .lbtn.pay{background:var(--green);color:#04210d;}
   .lbtn.undo{background:var(--bg-elev2);color:var(--label2);}
+
+  /* ===== Interromper fixo + empréstimos parcelados (v5) ===== */
+  .rule-row .rright{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:0 0 auto;}
+  .racts{display:flex;align-items:center;gap:6px;}
+  .rbtn{border:none;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer;transition:transform .1s;}
+  .rbtn:active{transform:scale(.92);}
+  .rbtn.stop{background:rgba(255,159,10,.16);color:var(--orange);}
+  .rbtn.resume{background:rgba(48,209,88,.16);color:var(--green);}
+  .lprog{height:5px;background:var(--bg-elev2);border-radius:3px;margin-top:7px;overflow:hidden;max-width:220px;}
+  .lprog>div{height:100%;background:var(--green);border-radius:3px;transition:width .4s;}
 </style>
 </head>
 <body>
@@ -401,6 +411,10 @@
     <label>Para quem você emprestou</label>
     <input id="inPerson" type="text" placeholder="Nome da pessoa">
   </div>
+  <div class="field" id="fieldLoanParts" style="display:none">
+    <label>Em quantas parcelas vão te pagar</label>
+    <input id="inLoanParts" type="number" min="1" max="120" inputmode="numeric" placeholder="1 = à vista">
+  </div>
   <div class="field" id="fieldDesc">
     <label id="lblDesc">Onde gastei</label>
     <input id="inDesc" type="text" placeholder="Ex: Mercado, Uber, Café...">
@@ -466,6 +480,11 @@ function saveTx(){localStorage.setItem(TX_KEY,JSON.stringify(txs));}
 function saveCats(){localStorage.setItem(CAT_KEY,JSON.stringify(cats));}
 function saveRules(){localStorage.setItem(RULES_KEY,JSON.stringify(rules));}
 function saveLoans(){localStorage.setItem(LOANS_KEY,JSON.stringify(loans));}
+// migra empréstimos antigos (modelo repaid) para o novo modelo de parcelas
+loans.forEach(l=>{
+  if(l.parts==null) l.parts=1;
+  if(!Array.isArray(l.paid)) l.paid = l.repaid ? [{pid:"p0",date:l.repaidDate||l.date}] : [];
+});
 
 /* ---------- State ---------- */
 let cursor=new Date(); cursor.setDate(1);
@@ -489,10 +508,14 @@ const resolveCat=id=>SPECIAL[id]||findCatAny(id);
 const monthsBetween=(a,b)=>{const[ay,am]=a.split("-").map(Number);const[by,bm]=b.split("-").map(Number);return (by-ay)*12+(bm-am);};
 const daysInMonth=mk=>{const[y,m]=mk.split("-").map(Number);return new Date(y,m,0).getDate();};
 const dateForDay=(mk,day)=>`${mk}-${String(Math.min(day||1,daysInMonth(mk))).padStart(2,"0")}`;
+const addMonths=(mk,delta)=>{const[y,m]=mk.split("-").map(Number);return monthKey(new Date(y,m-1+delta,1));};
+const monthLabel=mk=>{const[y,m]=mk.split("-").map(Number);return `${MONTHS_ABBR[m-1]}/${y}`;};
+const parcelaValue=l=>l.amount/(l.parts||1);
 function ruleIdx(r,mk){
   const idx=monthsBetween(r.start,mk);
   if(idx<0) return -1;
   if(r.kind==="fixed" && r.active===false) return -1;
+  if(r.kind==="fixed" && r.until && monthsBetween(mk,r.until)<0) return -1; // interrompido: não cobra após 'until'
   if(r.kind==="installment" && idx>=r.months) return -1;
   return idx;
 }
@@ -508,8 +531,13 @@ function recurringForMonth(mk){
 function loansForMonth(mk){
   const out=[];
   for(const l of loans){
-    if(l.date.slice(0,7)===mk) out.push({id:"l:"+l.id,type:"expense",amount:l.amount,desc:"Empréstimo a "+l.person,date:l.date,cat:"_loan",badge:"Empréstimo",virtual:"loan",loanId:l.id});
-    if(l.repaid&&l.repaidDate&&l.repaidDate.slice(0,7)===mk) out.push({id:"lb:"+l.id,type:"income",amount:l.amount,desc:"Recebido de "+l.person,date:l.repaidDate,cat:"_loan",badge:"Devolução",virtual:"loanback",loanId:l.id});
+    if(l.date.slice(0,7)===mk) out.push({id:"l:"+l.id,type:"expense",amount:l.amount,desc:"Empréstimo a "+l.person,date:l.date,cat:"_loan",badge:l.parts>1?`${l.parts}x`:"Empréstimo",virtual:"loan",loanId:l.id});
+    (l.paid||[]).forEach((p,i)=>{
+      if(p.date && p.date.slice(0,7)===mk){
+        const lbl=l.parts>1?`Parcela ${i+1}/${l.parts} de ${l.person}`:"Recebido de "+l.person;
+        out.push({id:"lb:"+l.id+":"+p.pid,type:"income",amount:parcelaValue(l),desc:lbl,date:p.date,cat:"_loan",badge:"Devolução",virtual:"loanback",loanId:l.id,pid:p.pid});
+      }
+    });
   }
   return out;
 }
@@ -522,13 +550,18 @@ function carryBefore(mk){
   for(const t of txs){ if(t.date.slice(0,7)<mk) c+=(t.type==="income"?t.amount:-t.amount); }
   for(const r of rules){
     let occ;
-    if(r.kind==="fixed") occ=(r.active===false)?0:Math.max(0,monthsBetween(r.start,mk));
-    else occ=Math.max(0,Math.min(monthsBetween(r.start,mk),r.months));
+    if(r.kind==="fixed"){
+      if(r.active===false){ occ=0; }
+      else {
+        occ=Math.max(0,monthsBetween(r.start,mk));
+        if(r.until){ const cap=monthsBetween(r.start,r.until)+1; occ=Math.min(occ,Math.max(0,cap)); }
+      }
+    } else occ=Math.max(0,Math.min(monthsBetween(r.start,mk),r.months));
     c-=occ*r.amount;
   }
   for(const l of loans){
     if(l.date.slice(0,7)<mk) c-=l.amount;
-    if(l.repaid&&l.repaidDate&&l.repaidDate.slice(0,7)<mk) c+=l.amount;
+    (l.paid||[]).forEach(p=>{ if(p.date && p.date.slice(0,7)<mk) c+=parcelaValue(l); });
   }
   return c;
 }
@@ -609,7 +642,7 @@ function render(){
       const items=groups[day].map(t=>{
         const c=resolveCat(t.cat); const inc=t.type==="income"; const kind=t.virtual||"real";
         const meta=escapeHtml(c.n)+(t.badge?` · <span class="bdg">${t.badge}</span>`:(inc?" · Entrada":""));
-        const dataAttrs=`data-kind="${kind}" data-id="${t.id}"`+(t.ruleId?` data-rid="${t.ruleId}"`:"")+(t.loanId?` data-lid="${t.loanId}"`:"");
+        const dataAttrs=`data-kind="${kind}" data-id="${t.id}"`+(t.ruleId?` data-rid="${t.ruleId}"`:"")+(t.loanId?` data-lid="${t.loanId}"`:"")+(t.pid?` data-pid="${t.pid}"`:"");
         return `<div class="tx"><div class="ic" style="background:${c.c}22">${c.e}</div>
           <div class="info"><div class="desc">${escapeHtml(txTitle(t))}</div><div class="meta">${meta}</div></div>
           <div class="amt ${inc?'in':''}">${inc?'+':'-'}${brl(t.amount)}</div>
@@ -631,50 +664,84 @@ function renderRulesCard(){
   const ordered=rules.slice().sort((a,b)=>(a.kind===b.kind?0:a.kind==="fixed"?-1:1));
   const rows=ordered.map(r=>{
     const c=resolveCat(r.cat);
-    const info=r.kind==="fixed"?`🔁 Todo mês · dia ${r.day}`:`💳 ${r.months}x · começou ${r.start.split("-").reverse().join("/")}`;
+    let info, actions="";
+    if(r.kind==="fixed"){
+      if(r.until){ info=`⏸ Cobrado até ${monthLabel(r.until)}`; actions=`<button class="rbtn resume" data-rresume="${r.id}">Reativar</button>`; }
+      else { info=`🔁 Todo mês · dia ${r.day}`; actions=`<button class="rbtn stop" data-rstop="${r.id}">Interromper</button>`; }
+    } else {
+      info=`💳 ${r.months}x · começou ${monthLabel(r.start)}`;
+    }
     return `<div class="rule-row">
       <div class="cat-ic" style="background:${c.c}22">${c.e}</div>
       <div class="info"><div class="desc">${escapeHtml(r.desc)}</div><div class="meta">${info}</div></div>
-      <div class="ramt">${brl(r.amount)}</div>
-      <button class="del" data-rdel="${r.id}" title="Remover">🗑️</button>
+      <div class="rright"><div class="ramt">${brl(r.amount)}</div>
+        <div class="racts">${actions}<button class="del" data-rdel="${r.id}" title="Remover">🗑️</button></div></div>
     </div>`;
   }).join("");
   el.innerHTML=`<div class="card rules"><h2>Fixos &amp; parcelas</h2>${rows}</div>`;
 }
 document.getElementById("rulesCard").addEventListener("click",e=>{
-  const b=e.target.closest("[data-rdel]"); if(!b)return;
-  const r=rules.find(x=>x.id===b.dataset.rdel); if(!r)return;
-  if(confirm(`Remover "${r.desc}"? Ele deixará de aparecer em todos os meses.`)){
-    rules=rules.filter(x=>x.id!==b.dataset.rdel); saveRules(); render();
+  const stop=e.target.closest("[data-rstop]"), resume=e.target.closest("[data-rresume]"), del=e.target.closest("[data-rdel]");
+  if(stop){
+    const r=rules.find(x=>x.id===stop.dataset.rstop); if(!r)return;
+    const stopMk=monthKey(cursor);          // mês em vista = 1º mês a NÃO cobrar
+    const until=addMonths(stopMk,-1);        // último mês cobrado
+    if(monthsBetween(r.start,until)<0){ alert("Este fixo começa neste mês ou depois — para removê-lo use a 🗑️."); return; }
+    if(confirm(`Interromper "${r.desc}"?\n\nContinua cobrado até ${monthLabel(until)} e NÃO será mais cobrado a partir de ${monthLabel(stopMk)}. Os meses já cobrados não mudam.\n\nDica: navegue até o mês a partir do qual quer parar antes de interromper.`)){
+      r.until=until; saveRules(); render();
+    }
+    return;
+  }
+  if(resume){
+    const r=rules.find(x=>x.id===resume.dataset.rresume); if(r){ delete r.until; saveRules(); render(); }
+    return;
+  }
+  if(del){
+    const r=rules.find(x=>x.id===del.dataset.rdel); if(!r)return;
+    if(confirm(`Remover "${r.desc}"? Ele deixará de aparecer em TODOS os meses (inclusive os já passados).`)){
+      rules=rules.filter(x=>x.id!==del.dataset.rdel); saveRules(); render();
+    }
+    return;
   }
 });
 
 /* ---------- Tela de empréstimos ---------- */
 function fmtDateBR(iso){const d=new Date(iso+"T12:00:00");return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;}
+const loanPaidCount=l=>(l.paid?l.paid.length:0);
+const loanFull=l=>loanPaidCount(l)>=l.parts;
+const loanRemaining=l=>(l.parts-loanPaidCount(l))*parcelaValue(l);
 function renderLoans(){
-  const open=loans.filter(l=>!l.repaid), paid=loans.filter(l=>l.repaid);
-  const recv=open.reduce((s,l)=>s+l.amount,0);
+  const recv=loans.reduce((s,l)=>s+loanRemaining(l),0);
+  const open=loans.filter(l=>!loanFull(l)), done=loans.filter(l=>loanFull(l));
   document.getElementById("loanReceivable").textContent=brl(recv);
-  document.getElementById("loanSub").textContent=loans.length?`${open.length} em aberto · ${paid.length} pago(s)`:"Nenhum empréstimo registrado";
+  document.getElementById("loanSub").textContent=loans.length?`${open.length} em aberto · ${done.length} quitado(s)`:"Nenhum empréstimo registrado";
   const cont=document.getElementById("loansList");
   if(!loans.length){ cont.innerHTML=`<div class="empty"><div class="big">🤝</div>Você ainda não registrou empréstimos.<br>Toque em <b>Registrar empréstimo</b>.</div>`; return; }
-  const row=l=>`<div class="loan-row ${l.repaid?'paid':''}">
+  const row=l=>{
+    const np=loanPaidCount(l), full=loanFull(l), pv=parcelaValue(l);
+    const meta=l.parts>1
+      ? `Emprestado em ${fmtDateBR(l.date)} · ${np}/${l.parts} parcelas de ${brl(pv)}`
+      : `Emprestado em ${fmtDateBR(l.date)}${full?` · pago em ${fmtDateBR(l.paid[0].date)}`:""}`;
+    const prog=l.parts>1?`<div class="lprog"><div style="width:${Math.round(np/l.parts*100)}%"></div></div>`:"";
+    const payLbl=l.parts>1?"Recebi parcela":"Recebi";
+    const acts=`${full?"":`<button class="lbtn pay" data-pay="${l.id}">${payLbl}</button>`}`+
+               `${np>0?`<button class="lbtn undo" data-undo="${l.id}">Desfazer</button>`:""}`+
+               `<button class="del" data-ldel="${l.id}">🗑️</button>`;
+    return `<div class="loan-row ${full?'paid':''}">
       <div class="lic">🤝</div>
       <div class="info"><div class="desc">${escapeHtml(l.person)} <span class="lamt">${brl(l.amount)}</span></div>
-        <div class="meta">Emprestado em ${fmtDateBR(l.date)}${l.repaid?` · pago em ${fmtDateBR(l.repaidDate)}`:""}</div></div>
-      <div class="lacts">
-        ${l.repaid?`<button class="lbtn undo" data-undo="${l.id}">Desfazer</button>`:`<button class="lbtn pay" data-pay="${l.id}">Recebi</button>`}
-        <button class="del" data-ldel="${l.id}">🗑️</button>
-      </div></div>`;
+        <div class="meta">${meta}</div>${prog}</div>
+      <div class="lacts">${acts}</div></div>`;
+  };
   let html="";
   if(open.length) html+=`<div class="day-head">Em aberto</div><div class="tx-list">${open.sort((a,b)=>b.date.localeCompare(a.date)).map(row).join("")}</div>`;
-  if(paid.length) html+=`<div class="day-head" style="margin-top:18px">Pagos</div><div class="tx-list">${paid.sort((a,b)=>b.date.localeCompare(a.date)).map(row).join("")}</div>`;
+  if(done.length) html+=`<div class="day-head" style="margin-top:18px">Quitados</div><div class="tx-list">${done.sort((a,b)=>b.date.localeCompare(a.date)).map(row).join("")}</div>`;
   cont.innerHTML=html;
 }
 document.getElementById("loansList").addEventListener("click",e=>{
   const pay=e.target.closest("[data-pay]"), undo=e.target.closest("[data-undo]"), del=e.target.closest("[data-ldel]");
-  if(pay){ const l=loans.find(x=>x.id===pay.dataset.pay); if(l){ l.repaid=true; l.repaidDate=new Date().toISOString().slice(0,10); saveLoans(); render(); } return; }
-  if(undo){ const l=loans.find(x=>x.id===undo.dataset.undo); if(l){ l.repaid=false; l.repaidDate=null; saveLoans(); render(); } return; }
+  if(pay){ const l=loans.find(x=>x.id===pay.dataset.pay); if(l&&loanPaidCount(l)<l.parts){ l.paid.push({pid:"p"+Date.now()+Math.floor(Math.random()*1000),date:new Date().toISOString().slice(0,10)}); saveLoans(); render(); } return; }
+  if(undo){ const l=loans.find(x=>x.id===undo.dataset.undo); if(l&&loanPaidCount(l)){ l.paid.pop(); saveLoans(); render(); } return; }
   if(del){ const l=loans.find(x=>x.id===del.dataset.ldel); if(l&&confirm(`Excluir o empréstimo de ${l.person}?`)){ loans=loans.filter(x=>x.id!==del.dataset.ldel); saveLoans(); render(); } return; }
 });
 
@@ -813,6 +880,7 @@ function setType(type){
   document.getElementById("sheetTitle").textContent=isExp?"Novo gasto":isInc?"Nova entrada":"Novo empréstimo";
   document.getElementById("lblAmount").textContent=isExp?"Quanto gastei":isInc?"Quanto ganhei":"Valor emprestado";
   document.getElementById("fieldPerson").style.display=isLoan?"":"none";
+  document.getElementById("fieldLoanParts").style.display=isLoan?"":"none";
   document.getElementById("fieldDesc").style.display=isExp?"":"none";
   document.getElementById("fieldRecur").style.display=isExp?"":"none";
   document.getElementById("fieldCat").style.display=isLoan?"none":"";
@@ -837,7 +905,12 @@ document.getElementById("txContainer").addEventListener("click",e=>{
     if(r&&confirm(`Remover "${r.desc}"? Ele deixará de aparecer em todos os meses.`)){ rules=rules.filter(x=>x.id!==b.dataset.rid); saveRules(); render(); }
     return;
   }
-  if(kind==="loan"||kind==="loanback"){
+  if(kind==="loanback"){
+    const l=loans.find(x=>x.id===b.dataset.lid);
+    if(l&&confirm("Desmarcar esta parcela como paga?")){ l.paid=(l.paid||[]).filter(p=>p.pid!==b.dataset.pid); saveLoans(); render(); }
+    return;
+  }
+  if(kind==="loan"){
     const l=loans.find(x=>x.id===b.dataset.lid);
     if(l&&confirm(`Excluir o empréstimo de ${l.person}? (gerencie também na aba Empréstimos)`)){ loans=loans.filter(x=>x.id!==b.dataset.lid); saveLoans(); render(); }
     return;
@@ -892,7 +965,8 @@ document.getElementById("saveBtn").onclick=()=>{
   if(curType==="loan"){
     const person=document.getElementById("inPerson").value.trim();
     if(!person){ alert("Informe o nome da pessoa."); return; }
-    loans.push({id:"L"+Date.now(),person,amount,date,repaid:false,repaidDate:null});
+    const parts=Math.max(1,parseInt(document.getElementById("inLoanParts").value,10)||1);
+    loans.push({id:"L"+Date.now(),person,amount,date,parts,paid:[]});
     saveLoans();
   } else if(curType==="income"){
     txs.push({id:Date.now(),type:"income",amount,desc:"",date,cat:selectedCat});
@@ -913,7 +987,7 @@ document.getElementById("saveBtn").onclick=()=>{
   }
 
   cursor=new Date(date+"T12:00:00"); cursor.setDate(1);
-  ["inAmount","inDesc","inPerson","inMonths"].forEach(id=>document.getElementById(id).value="");
+  ["inAmount","inDesc","inPerson","inMonths","inLoanParts"].forEach(id=>document.getElementById(id).value="");
   closeSheet();
   if(curType==="loan"){ // mostra a aba de empréstimos
     document.querySelectorAll(".tabbar .tab").forEach(t=>t.classList.remove("active"));
